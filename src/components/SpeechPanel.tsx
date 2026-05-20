@@ -6,8 +6,8 @@ import { SpeechManager } from "@/lib/speech";
 import { calculateScore } from "@/lib/eprime";
 import { Mic, MicOff, Trash2 } from "lucide-react";
 import ScoreMeter from "./ScoreMeter";
-import DiffView from "./DiffView.tsx";
-import ChangesLog from "./ChangesLog.tsx";
+import DiffView from "./DiffView";
+import ChangesLog from "./ChangesLog";
 
 export default function SpeechPanel() {
   const {
