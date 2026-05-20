@@ -89,7 +89,27 @@ async function tryModel(
         config: {
           systemInstruction: SYSTEM_PROMPT,
           temperature: 0.3,
-          maxOutputTokens: 2048,
+          maxOutputTokens: 8192,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              translated: { type: "STRING" },
+              changes: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    original: { type: "STRING" },
+                    replacement: { type: "STRING" },
+                    reason: { type: "STRING" },
+                  },
+                  required: ["original", "replacement", "reason"],
+                },
+              },
+            },
+            required: ["translated", "changes"],
+          },
         },
       });
 
@@ -109,8 +129,33 @@ async function tryModel(
         }
         return parsed;
       } catch {
-        // JSON parse failed — return raw text as fallback
-        return { translated: raw, changes: [] };
+        // If JSON fails to parse (e.g., truncated because text was too long)
+        // Try to extract just the translated text using regex
+        const match = json.match(/"translated"\s*:\s*"([^]*)/);
+        if (match && match[1]) {
+          let partialText = match[1];
+          
+          // If the changes array started, chop it off
+          const changesIdx = partialText.indexOf('",\n  "changes"');
+          if (changesIdx !== -1) {
+            partialText = partialText.substring(0, changesIdx);
+          } else {
+            // It was truncated inside the text itself. Remove trailing quote if present.
+            if (partialText.endsWith('"')) partialText = partialText.slice(0, -1);
+          }
+          
+          partialText = partialText.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+          return { 
+            translated: partialText + "\n\n[Note: Text was truncated due to length limits]", 
+            changes: [] 
+          };
+        }
+        
+        // If extraction fails entirely, return a clean error string instead of dumping raw JSON
+        return { 
+          translated: "[Translation failed to parse or was truncated. Please try a shorter text.]", 
+          changes: [] 
+        };
       }
     } catch (error: any) {
       const status: number | undefined = error?.status;
