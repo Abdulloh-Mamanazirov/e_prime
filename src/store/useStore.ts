@@ -25,6 +25,10 @@ interface AppState {
   activeTab: "speech" | "text";
   setActiveTab: (tab: "speech" | "text") => void;
 
+  // Codex mode
+  translationMode: "subjective" | "strict";
+  setTranslationMode: (mode: "subjective" | "strict") => void;
+
   // Speech state
   isListening: boolean;
   setIsListening: (listening: boolean) => void;
@@ -68,6 +72,10 @@ export const useStore = create<AppState>((set) => ({
   // Active tab
   activeTab: "speech",
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  // Codex mode
+  translationMode: "subjective",
+  setTranslationMode: (mode) => set({ translationMode: mode }),
 
   // Speech state
   isListening: false,

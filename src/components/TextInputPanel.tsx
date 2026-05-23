@@ -22,6 +22,7 @@ export default function TextInputPanel() {
     setIsTranslating,
     explanationMode,
     addToHistory,
+    translationMode,
   } = useStore();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -37,7 +38,7 @@ export default function TextInputPanel() {
       const res = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: inputText.trim() }),
+        body: JSON.stringify({ text: inputText.trim(), mode: translationMode }),
       });
 
       if (!res.ok) throw new Error("Translation failed");
@@ -70,6 +71,7 @@ export default function TextInputPanel() {
     setTextChanges,
     setTextScore,
     addToHistory,
+    translationMode,
   ]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

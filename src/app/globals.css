@@ -51,7 +51,7 @@ html {
 }
 
 body {
-  background: var(--gradient-bg);
+  background: var(--gradient-bg) no-repeat fixed;
   color: var(--text-primary);
   font-family: var(--font-sans);
   min-height: 100vh;

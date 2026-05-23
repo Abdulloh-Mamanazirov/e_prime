@@ -1,8 +1,8 @@
 import { GoogleGenAI } from "@google/genai";
 
-const SYSTEM_PROMPT = `You are an expert E-Prime translator. E-Prime is a version of English that excludes all forms of the verb "to be" (am, is, are, was, were, be, being, been) and their contractions (I'm, you're, he's, she's, it's, that's, there's, we're, they're, isn't, aren't, wasn't, weren't).
+const STRICT_SYSTEM_PROMPT = `You are an expert E-Prime translator. E-Prime is a version of English that excludes all forms of the verb "to be" (am, is, are, was, were, be, being, been) and their contractions (I'm, you're, he's, she's, it's, that's, there's, we're, they're, isn't, aren't, wasn't, weren't).
 
-Your job: Rewrite the user's text into natural, fluent E-Prime. 
+Your job: Rewrite the user's text into natural, fluent E-Prime.
 
 Rules:
 1. Remove ALL forms of "to be" and replace them with active, dynamic verbs.
@@ -18,7 +18,42 @@ You MUST respond with ONLY valid JSON in this exact format (no markdown, no code
     {
       "original": "the exact phrase that was changed",
       "replacement": "the new phrase",
+      "category": "identity" | "projection" | "class_membership" | "existence" | "auxiliary",
       "reason": "brief explanation of why this violates E-Prime and how the replacement works"
+    }
+  ]
+}
+
+If the text already follows E-Prime (contains no "to be" forms), return:
+{
+  "translated": "the original text unchanged",
+  "changes": []
+}`;
+
+const SUBJECTIVE_SYSTEM_PROMPT = `You are an expert in Alfred Korzybski's General Semantics, E-Prime philosophy, and cognitive linguistics. 
+
+Standard English uses the verb "to be" to make subjective projections seem like objective facts. For example:
+- Projection: Saying "This class is boring" instead of acknowledging "I feel bored by this class".
+- Identity: Saying "You are a mental disease" instead of "I think you represent a mental disease" or "To me, you behave like a mental disease".
+
+Your job: Translate the user's text into E-Prime, but specifically focus on "Honest Subjectivity" (the Codex).
+
+Rules:
+1. Remove ALL forms of "to be" (am, is, are, was, were, be, being, been) and their contractions.
+2. Identify the function of each "to be" form in the original sentence.
+3. If the "to be" form functions as "projection" (subjective judgment/evaluation projected as objective fact) or "identity" (labeling someone/something), you MUST rewrite the statement to explicitly reinsert the observer/speaker. Use subjective reframing like "I think", "I feel", "I perceive", "To me", "In my view", "In my opinion", or "I experience".
+4. If it is "class_membership", "existence", or an "auxiliary" helper verb, translate it to an active, descriptive verb (e.g., "A dog belongs to the canine group", "A building stands there", "He continues walking").
+5. The translation MUST contain zero "to be" forms.
+
+You MUST respond with ONLY valid JSON in this exact format (no markdown, no code fences):
+{
+  "translated": "The E-Prime version of the text",
+  "changes": [
+    {
+      "original": "the exact phrase that was changed",
+      "replacement": "the new phrase",
+      "category": "identity" | "projection" | "class_membership" | "existence" | "auxiliary",
+      "reason": "brief explanation of the semantic function of 'to be' here and how the replacement reinserts subjectivity or active voice"
     }
   ]
 }
@@ -32,6 +67,7 @@ If the text already follows E-Prime (contains no "to be" forms), return:
 export interface TranslationChange {
   original: string;
   replacement: string;
+  category: "identity" | "projection" | "class_membership" | "existence" | "auxiliary";
   reason: string;
 }
 
@@ -41,8 +77,6 @@ export interface TranslationResult {
 }
 
 // ── Model fallback chain ──────────────────────────────────────────
-// gemini-2.0-flash has ~1500 req/day on free tier (vs 20 for 2.5-flash).
-// If daily quota exhausts, we fall through to the next model.
 const MODEL_CHAIN = [
   "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
@@ -56,10 +90,8 @@ const MODEL_CHAIN = [
 function parseRetryDelay(error: unknown): number | null {
   try {
     const msg = String((error as any)?.message ?? "");
-    // "Please retry in 20.192741211s."
     const inline = msg.match(/retry in (\d+(?:\.\d+)?)s/i);
     if (inline) return Math.ceil(parseFloat(inline[1]) * 1000);
-    // "retryDelay":"20s"
     const detail = msg.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
     if (detail) return Math.ceil(parseFloat(detail[1]) * 1000);
   } catch { /* swallow */ }
@@ -78,8 +110,10 @@ async function tryModel(
   ai: InstanceType<typeof GoogleGenAI>,
   model: string,
   text: string,
+  mode: "strict" | "subjective",
 ): Promise<TranslationResult> {
   const maxRetries = 2;
+  const systemInstruction = mode === "strict" ? STRICT_SYSTEM_PROMPT : SUBJECTIVE_SYSTEM_PROMPT;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -87,7 +121,7 @@ async function tryModel(
         model,
         contents: text,
         config: {
-          systemInstruction: SYSTEM_PROMPT,
+          systemInstruction,
           temperature: 0.3,
           maxOutputTokens: 8192,
           responseMimeType: "application/json",
@@ -102,9 +136,13 @@ async function tryModel(
                   properties: {
                     original: { type: "STRING" },
                     replacement: { type: "STRING" },
+                    category: {
+                      type: "STRING",
+                      enum: ["identity", "projection", "class_membership", "existence", "auxiliary"]
+                    },
                     reason: { type: "STRING" },
                   },
-                  required: ["original", "replacement", "reason"],
+                  required: ["original", "replacement", "category", "reason"],
                 },
               },
             },
@@ -116,7 +154,6 @@ async function tryModel(
       const raw = response?.text?.trim();
       if (!raw) throw new Error("Empty response from Gemini API");
 
-      // Strip markdown code fences if present
       let json = raw;
       if (json.startsWith("```")) {
         json = json.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
@@ -129,18 +166,13 @@ async function tryModel(
         }
         return parsed;
       } catch {
-        // If JSON fails to parse (e.g., truncated because text was too long)
-        // Try to extract just the translated text using regex
         const match = json.match(/"translated"\s*:\s*"([^]*)/);
         if (match && match[1]) {
           let partialText = match[1];
-          
-          // If the changes array started, chop it off
           const changesIdx = partialText.indexOf('",\n  "changes"');
           if (changesIdx !== -1) {
             partialText = partialText.substring(0, changesIdx);
           } else {
-            // It was truncated inside the text itself. Remove trailing quote if present.
             if (partialText.endsWith('"')) partialText = partialText.slice(0, -1);
           }
           
@@ -151,7 +183,6 @@ async function tryModel(
           };
         }
         
-        // If extraction fails entirely, return a clean error string instead of dumping raw JSON
         return { 
           translated: "[Translation failed to parse or was truncated. Please try a shorter text.]", 
           changes: [] 
@@ -160,13 +191,9 @@ async function tryModel(
     } catch (error: any) {
       const status: number | undefined = error?.status;
 
-      // ── 429 Rate Limit ──────────────────────────────────────
       if (status === 429) {
-        // Daily quota → don't retry, bubble up so the fallback chain
-        // can switch to the next model.
         if (isDailyQuotaError(error)) throw error;
 
-        // Per-minute rate limit → wait the exact delay Google tells us
         if (attempt < maxRetries) {
           const delay = parseRetryDelay(error) ?? 3000 * Math.pow(2, attempt);
           console.warn(`[${model}] Rate limited, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
@@ -175,7 +202,6 @@ async function tryModel(
         }
       }
 
-      // ── 503 Overloaded ──────────────────────────────────────
       if (status === 503 && attempt < maxRetries) {
         const delay = parseRetryDelay(error) ?? 2000 * Math.pow(2, attempt);
         console.warn(`[${model}] Service unavailable, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
@@ -183,7 +209,6 @@ async function tryModel(
         continue;
       }
 
-      // Non-retryable or exhausted retries
       throw error;
     }
   }
@@ -196,23 +221,21 @@ async function tryModel(
 export async function translateToEPrime(
   text: string,
   apiKey: string,
+  mode: "strict" | "subjective" = "subjective",
 ): Promise<TranslationResult> {
   const ai = new GoogleGenAI({ apiKey });
 
   for (let i = 0; i < MODEL_CHAIN.length; i++) {
     const model = MODEL_CHAIN[i];
     try {
-      console.log(`→ Translating with ${model}...`);
-      return await tryModel(ai, model, text);
+      console.log(`→ Translating with ${model} in ${mode} mode...`);
+      return await tryModel(ai, model, text, mode);
     } catch (error: any) {
-      // Daily quota exhausted → fall through to next model
       if (error?.status === 429 && isDailyQuotaError(error)) {
         console.warn(`✗ Daily quota exhausted for ${model}, falling back...`);
         continue;
       }
-      // Any other error on the last model → give up
       if (i === MODEL_CHAIN.length - 1) throw error;
-      // Any other error on a non-last model → also try next model
       console.warn(`✗ ${model} failed (${error?.status ?? "unknown"}), falling back...`);
     }
   }

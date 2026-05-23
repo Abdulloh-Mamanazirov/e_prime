@@ -21,6 +21,7 @@ export default function SpeechPanel() {
     clearUtterances,
     explanationMode,
     addToHistory,
+    translationMode,
   } = useStore();
 
   const speechRef = useRef<SpeechManager | null>(null);
@@ -33,7 +34,7 @@ export default function SpeechPanel() {
         const res = await fetch("/api/translate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text, mode: translationMode }),
         });
 
         if (!res.ok) throw new Error("Translation failed");
@@ -64,7 +65,7 @@ export default function SpeechPanel() {
         });
       }
     },
-    [updateUtterance, addToHistory]
+    [updateUtterance, addToHistory, translationMode]
   );
 
   useEffect(() => {

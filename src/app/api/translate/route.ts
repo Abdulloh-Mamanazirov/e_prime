@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text } = body;
+    const { text, mode } = body;
 
     if (!text || typeof text !== "string") {
       return Response.json(
@@ -18,6 +18,7 @@ export async function POST(request: NextRequest) {
     }
 
     const trimmedText = text.trim();
+    const translationMode = mode === "strict" ? "strict" : "subjective";
 
     // Skip API call entirely if text already complies with E-Prime
     if (isEPrimeCompliant(trimmedText)) {
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
     // Route through the queue so requests run one-at-a-time
     // with a minimum 1.5s gap — prevents burst-firing the API
     const result = await translationQueue.enqueue(() =>
-      translateToEPrime(trimmedText, apiKey)
+      translateToEPrime(trimmedText, apiKey, translationMode)
     );
 
     return Response.json(result);
